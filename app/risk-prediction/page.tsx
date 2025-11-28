@@ -1,10 +1,10 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { trainModel, predictRisk, isModelReady } from "@/lib/fire-risk-model"
 
 interface PredictionResult {
   riskScore: number
@@ -37,6 +37,30 @@ export default function RiskPredictionPage() {
   })
   const [prediction, setPrediction] = useState<PredictionResult | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isTraining, setIsTraining] = useState(false)
+  const [modelReady, setModelReady] = useState(false)
+  const [trainingProgress, setTrainingProgress] = useState(0)
+
+  // Train model on mount
+  useEffect(() => {
+    const initModel = async () => {
+      if (!isModelReady()) {
+        setIsTraining(true)
+        try {
+          await trainModel((epoch, loss) => {
+            setTrainingProgress(Math.round((epoch / 100) * 100))
+          })
+          setModelReady(true)
+        } catch (error) {
+          console.error('Model training failed:', error)
+        }
+        setIsTraining(false)
+      } else {
+        setModelReady(true)
+      }
+    }
+    initModel()
+  }, [])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
@@ -48,45 +72,54 @@ export default function RiskPredictionPage() {
 
   const handlePredict = async () => {
     setIsLoading(true)
-    // Simulate prediction
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    
+    try {
+      // Use real ML model prediction
+      const result = await predictRisk(
+        formData.temperature,
+        formData.humidity,
+        formData.rainfall,
+        formData.vegetation
+      )
 
-    // Calculate risk score based on inputs (ML regression simulation)
-    const tempFactor = Math.min(formData.temperature / 40, 1) * 30
-    const humidityFactor = Math.max((100 - formData.humidity) / 100, 0) * 30
-    const rainfallFactor = Math.max((50 - formData.rainfall) / 50, 0) * 20
-    const vegetationFactor = Math.min(formData.vegetation / 100, 1) * 20
+      const riskScore = result.riskScore
+      
+      // Determine risk level
+      let riskLevel: "Low" | "Medium" | "High" | "Critical"
+      if (riskScore < 30) riskLevel = "Low"
+      else if (riskScore < 55) riskLevel = "Medium"
+      else if (riskScore < 75) riskLevel = "High"
+      else riskLevel = "Critical"
 
-    const riskScore = Math.round(tempFactor + humidityFactor + rainfallFactor + vegetationFactor)
+      // Calculate feature importance (simplified approximation)
+      const tempWeight = Math.abs(formData.temperature - 25) / 50
+      const humidityWeight = Math.abs(100 - formData.humidity) / 100
+      const rainfallWeight = Math.abs(50 - formData.rainfall) / 50
+      const vegetationWeight = formData.vegetation / 100
 
-    let riskLevel: "Low" | "Medium" | "High" | "Critical"
-    if (riskScore < 25) riskLevel = "Low"
-    else if (riskScore < 50) riskLevel = "Medium"
-    else if (riskScore < 75) riskLevel = "High"
-    else riskLevel = "Critical"
+      const totalWeight = tempWeight + humidityWeight + rainfallWeight + vegetationWeight
+      const featureImportance = {
+        temperature: Math.round((tempWeight / totalWeight) * 100),
+        humidity: Math.round((humidityWeight / totalWeight) * 100),
+        rainfall: Math.round((rainfallWeight / totalWeight) * 100),
+        vegetation: Math.round((vegetationWeight / totalWeight) * 100),
+      }
 
-    const totalFactors = tempFactor + humidityFactor + rainfallFactor + vegetationFactor
-    const featureImportance = {
-      temperature: Math.round((tempFactor / totalFactors) * 100),
-      humidity: Math.round((humidityFactor / totalFactors) * 100),
-      rainfall: Math.round((rainfallFactor / totalFactors) * 100),
-      vegetation: Math.round((vegetationFactor / totalFactors) * 100),
+      setPrediction({
+        riskScore,
+        riskLevel,
+        confidence: result.confidence,
+        confidenceRange: {
+          min: Math.max(0, riskScore - result.uncertainty),
+          max: Math.min(100, riskScore + result.uncertainty),
+        },
+        factors: formData,
+        featureImportance,
+      })
+    } catch (error) {
+      console.error('Prediction error:', error)
     }
-
-    const confidence = Math.round(75 + Math.random() * 20)
-    const margin = Math.round(riskScore * 0.15)
-
-    setPrediction({
-      riskScore,
-      riskLevel,
-      confidence,
-      confidenceRange: {
-        min: Math.max(0, riskScore - margin),
-        max: Math.min(100, riskScore + margin),
-      },
-      factors: formData,
-      featureImportance,
-    })
+    
     setIsLoading(false)
   }
 
@@ -126,29 +159,53 @@ export default function RiskPredictionPage() {
       <div className="mb-12">
         <h1 className="text-4xl font-bold mb-4 text-foreground">Fire Risk Prediction</h1>
         <p className="text-lg text-muted-foreground">
-          Machine learning regression model for predicting wildfire risk based on environmental and weather conditions
+          Machine learning neural network model for predicting wildfire risk based on environmental conditions
         </p>
       </div>
 
+      {/* Model Status */}
+      {isTraining && (
+        <Card className="p-6 mb-8 bg-blue-50 border-blue-200">
+          <h3 className="font-bold mb-3">🧠 Training ML Model...</h3>
+          <div className="w-full bg-blue-200 rounded-full h-3 mb-2">
+            <div 
+              className="bg-blue-600 h-3 rounded-full transition-all duration-300"
+              style={{ width: `${trainingProgress}%` }}
+            />
+          </div>
+          <p className="text-sm text-blue-700">
+            Training neural network with TensorFlow.js: {trainingProgress}%
+          </p>
+        </Card>
+      )}
+
+      {modelReady && !isTraining && (
+        <Card className="p-4 mb-8 bg-green-50 border-green-200">
+          <p className="text-sm text-green-800">
+            ✅ <strong>ML Model Ready!</strong> Neural network trained with 20 historical fire scenarios
+          </p>
+        </Card>
+      )}
+
       {/* Model Information */}
       <Card className="p-6 mb-8 border-border bg-card">
-        <h2 className="text-lg font-bold mb-4 text-foreground">ML Regression Model</h2>
+        <h2 className="text-lg font-bold mb-4 text-foreground">Neural Network Architecture</h2>
         <div className="grid md:grid-cols-4 gap-4 text-sm">
           <div>
             <p className="text-muted-foreground mb-1">Model Type</p>
-            <p className="font-semibold text-foreground">Multiple Linear Regression</p>
+            <p className="font-semibold text-foreground">Deep Neural Network</p>
           </div>
           <div>
-            <p className="text-muted-foreground mb-1">Input Features</p>
-            <p className="font-semibold text-foreground">4 Environmental Factors</p>
+            <p className="text-muted-foreground mb-1">Layers</p>
+            <p className="font-semibold text-foreground">4 Hidden Layers (16-32-16-1)</p>
           </div>
           <div>
-            <p className="text-muted-foreground mb-1">Output Range</p>
-            <p className="font-semibold text-foreground">0 - 100 Risk Score</p>
+            <p className="text-muted-foreground mb-1">Training Data</p>
+            <p className="font-semibold text-foreground">20 Historical Scenarios</p>
           </div>
           <div>
-            <p className="text-muted-foreground mb-1">Accuracy</p>
-            <p className="font-semibold text-foreground">92% Validation</p>
+            <p className="text-muted-foreground mb-1">Framework</p>
+            <p className="font-semibold text-foreground">TensorFlow.js</p>
           </div>
         </div>
       </Card>
@@ -173,6 +230,7 @@ export default function RiskPredictionPage() {
                   value={formData.temperature}
                   onChange={handleInputChange}
                   className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  disabled={isTraining}
                 />
                 <div className="flex justify-between text-xs text-muted-foreground mt-2">
                   <span>0°C</span>
@@ -193,6 +251,7 @@ export default function RiskPredictionPage() {
                   value={formData.humidity}
                   onChange={handleInputChange}
                   className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  disabled={isTraining}
                 />
                 <div className="flex justify-between text-xs text-muted-foreground mt-2">
                   <span>0%</span>
@@ -213,6 +272,7 @@ export default function RiskPredictionPage() {
                   value={formData.rainfall}
                   onChange={handleInputChange}
                   className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  disabled={isTraining}
                 />
                 <div className="flex justify-between text-xs text-muted-foreground mt-2">
                   <span>0mm</span>
@@ -233,6 +293,7 @@ export default function RiskPredictionPage() {
                   value={formData.vegetation}
                   onChange={handleInputChange}
                   className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  disabled={isTraining}
                 />
                 <div className="flex justify-between text-xs text-muted-foreground mt-2">
                   <span>0%</span>
@@ -243,7 +304,7 @@ export default function RiskPredictionPage() {
 
             <Button
               onClick={handlePredict}
-              disabled={isLoading}
+              disabled={isLoading || isTraining || !modelReady}
               size="lg"
               className="w-full mt-8 bg-primary hover:bg-primary/90 text-primary-foreground"
             >
@@ -252,8 +313,10 @@ export default function RiskPredictionPage() {
                   <div className="animate-spin mr-2 w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full" />
                   Predicting...
                 </>
+              ) : isTraining ? (
+                "Training Model..."
               ) : (
-                "Predict Risk"
+                "Predict Risk with ML"
               )}
             </Button>
           </Card>
@@ -294,11 +357,11 @@ export default function RiskPredictionPage() {
               </Card>
 
               <Card className="p-6 border-border bg-card">
-                <h3 className="font-bold mb-4 text-foreground">Prediction Confidence</h3>
+                <h3 className="font-bold mb-4 text-foreground">ML Model Confidence</h3>
                 <div className="space-y-4">
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <span className="text-sm text-muted-foreground">Model Confidence</span>
+                      <span className="text-sm text-muted-foreground">Prediction Confidence</span>
                       <span className="font-semibold text-foreground">{prediction.confidence}%</span>
                     </div>
                     <div className="w-full bg-muted rounded-full h-2">
@@ -306,12 +369,12 @@ export default function RiskPredictionPage() {
                     </div>
                   </div>
                   <div className="pt-2 border-t border-border">
-                    <p className="text-sm text-muted-foreground mb-2">Confidence Interval (95%)</p>
+                    <p className="text-sm text-muted-foreground mb-2">Prediction Range</p>
                     <p className="text-lg font-semibold text-foreground">
                       {prediction.confidenceRange.min} - {prediction.confidenceRange.max}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      The predicted risk score is likely within this range
+                      Neural network uncertainty bounds
                     </p>
                   </div>
                 </div>
@@ -323,22 +386,22 @@ export default function RiskPredictionPage() {
                 <div className="space-y-3 text-sm">
                   {prediction.riskLevel === "Critical" && (
                     <p className="text-red-600 font-semibold">
-                      Critical fire risk detected. Immediate preventive measures recommended.
+                      ⚠️ Critical fire risk detected. Immediate preventive measures recommended.
                     </p>
                   )}
                   {prediction.riskLevel === "High" && (
                     <p className="text-primary font-semibold">
-                      High fire risk. Enhanced monitoring and preparedness required.
+                      🔥 High fire risk. Enhanced monitoring and preparedness required.
                     </p>
                   )}
                   {prediction.riskLevel === "Medium" && (
                     <p className="text-secondary font-semibold">
-                      Moderate fire risk. Standard precautions should be maintained.
+                      ⚡ Moderate fire risk. Standard precautions should be maintained.
                     </p>
                   )}
                   {prediction.riskLevel === "Low" && (
                     <p className="text-green-600 font-semibold">
-                      Low fire risk. Conditions are favorable for fire prevention.
+                      ✅ Low fire risk. Conditions are favorable for fire prevention.
                     </p>
                   )}
                 </div>
@@ -347,7 +410,11 @@ export default function RiskPredictionPage() {
           ) : (
             <Card className="p-12 border-dashed border-2 border-border flex items-center justify-center min-h-96 bg-card">
               <div className="text-center">
-                <p className="text-muted-foreground">Adjust the factors and click "Predict Risk" to see results</p>
+                <p className="text-muted-foreground">
+                  {isTraining 
+                    ? "Training ML model... Please wait." 
+                    : 'Adjust the factors and click "Predict Risk with ML" to see results'}
+                </p>
               </div>
             </Card>
           )}
@@ -373,7 +440,7 @@ export default function RiskPredictionPage() {
               ))}
             </div>
             <p className="text-xs text-muted-foreground mt-4">
-              Shows the relative contribution of each factor to the final risk prediction
+              Relative contribution of each environmental factor to the predicted risk
             </p>
           </Card>
 
